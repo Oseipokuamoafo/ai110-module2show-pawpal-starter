@@ -32,8 +32,21 @@ The initial UML design includes four main classes:
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes, the design was refined based on AI review feedback. Key changes include:
+
+1. **Added bidirectional Owner-Pet relationship**: Added a `pets` list to the `Owner` class and an `add_pet()` method that maintains consistency on both sides. This prevents the asymmetry where pets knew their owner but owners had no list of their pets. This is essential for the Scheduler to access all pets through the owner.
+
+2. **Implemented Task validation**: Added `__post_init__()` method to the `Task` dataclass to validate that priority is between 1-5 and duration is positive. This prevents invalid data from entering the system and causing scheduling errors.
+
+3. **Added pet management to Scheduler**: Included `add_pet()` method in the Scheduler class to manage the pet list. The Scheduler now initializes its pet list from the owner's pets, maintaining a single source of truth.
+
+4. **Added task filtering methods**: Implemented `get_tasks_by_pet()`, `get_tasks_by_type()`, and `get_incomplete_tasks()` to support the UI and scheduling logic. These methods will be essential for displaying tasks and generating schedules.
+
+5. **Added time tracking**: Implemented `get_total_scheduled_time()` method to track how much time has been scheduled vs. the owner's available time. This is critical for the core constraint-based scheduling.
+
+6. **Implemented simple dataclass methods**: Converted stub methods like `mark_complete()`, `get_info()`, and `add_special_need()` into working implementations. These provide immediate utility without adding complexity.
+
+**Rationale**: These changes address potential logic bottlenecks identified during review, improve data integrity through validation, and add essential helper methods that will be needed for scheduling and UI integration.
 
 ---
 
