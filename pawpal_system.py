@@ -7,6 +7,7 @@ This module contains the main classes for the PawPal+ pet care scheduling system
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum
+from datetime import datetime, timedelta
 
 
 class TaskType(Enum):
@@ -18,6 +19,14 @@ class TaskType(Enum):
     ENRICHMENT = "enrichment"
     PLAYTIME = "playtime"
     TRAINING = "training"
+
+
+class Frequency(Enum):
+    """Enum for task recurrence frequency."""
+    ONCE = "once"
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
 
 
 @dataclass
@@ -97,6 +106,9 @@ class Task:
         task_type: Type of task (from TaskType enum)
         pet: Pet
         completed: Whether the task has been completed
+        scheduled_time: Optional specific time for the task (HH:MM format)
+        frequency: How often the task recurs (default: once)
+        due_date: Optional date for the task
     """
     name: str
     duration_minutes: int
@@ -104,6 +116,9 @@ class Task:
     task_type: TaskType
     pet: Pet
     completed: bool = False
+    scheduled_time: Optional[str] = None
+    frequency: Frequency = Frequency.ONCE
+    due_date: Optional[datetime] = None
 
     def __post_init__(self):
         """Validates task attributes after initialization."""
@@ -111,6 +126,14 @@ class Task:
             raise ValueError("Priority must be between 1 and 5")
         if self.duration_minutes <= 0:
             raise ValueError("Duration must be positive")
+        if self.scheduled_time:
+            # Validate time format (HH:MM)
+            try:
+                hours, minutes = map(int, self.scheduled_time.split(':'))
+                if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+                    raise ValueError
+            except (ValueError, AttributeError):
+                raise ValueError("Scheduled time must be in HH:MM format (e.g., '09:30')")
 
     def mark_complete(self) -> None:
         """Marks the task as completed."""
@@ -123,6 +146,65 @@ class Task:
     def get_duration(self) -> int:
         """Returns the task duration in minutes."""
         return self.duration_minutes
+
+    def get_end_time(self) -> Optional[str]:
+        """
+        Calculates and returns the end time of the task if scheduled_time is set.
+
+        Returns:
+            End time in HH:MM format, or None if no scheduled_time
+        """
+        if not self.scheduled_time:
+            return None
+
+        start = datetime.strptime(self.scheduled_time, '%H:%M')
+        end = start + timedelta(minutes=self.duration_minutes)
+        return end.strftime('%H:%M')
+
+    def create_recurring_instance(self) -> 'Task':
+        """
+        Creates a new instance of this task for the next occurrence.
+
+        Returns:
+            A new Task object with updated due_date based on frequency
+        """
+        if self.frequency == Frequency.ONCE:
+            raise ValueError("Cannot create recurring instance of a one-time task")
+
+        # Calculate next due date
+        if self.due_date:
+            if self.frequency == Frequency.DAILY:
+                next_date = self.due_date + timedelta(days=1)
+            elif self.frequency == Frequency.WEEKLY:
+                next_date = self.due_date + timedelta(weeks=1)
+            elif self.frequency == Frequency.MONTHLY:
+                next_date = self.due_date + timedelta(days=30)
+            else:
+                next_date = self.due_date
+        else:
+            # If no due date set, use tomorrow for daily tasks
+            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            if self.frequency == Frequency.DAILY:
+                next_date = today + timedelta(days=1)
+            elif self.frequency == Frequency.WEEKLY:
+                next_date = today + timedelta(weeks=1)
+            elif self.frequency == Frequency.MONTHLY:
+                next_date = today + timedelta(days=30)
+            else:
+                next_date = today
+
+        # Create new task with same properties but updated date
+        return Task(
+            name=self.name,
+            duration_minutes=self.duration_minutes,
+            priority=self.priority,
+            task_type=self.task_type,
+            pet=self.pet,
+            completed=False,
+            scheduled_time=self.scheduled_time,
+            frequency=self.frequency,
+            due_date=next_date
+        )
 
 
 class Scheduler:
@@ -156,6 +238,26 @@ class Scheduler:
         """Adds a task to the scheduler."""
         if task not in self.tasks:
             self.tasks.append(task)
+
+    def mark_task_complete(self, task: Task) -> Optional[Task]:
+        """
+        Marks a task as complete and creates a new instance if it's recurring.
+
+        Args:
+            task: The task to mark complete
+
+        Returns:
+            The new recurring task instance if applicable, None otherwise
+        """
+        task.mark_complete()
+
+        # If this is a recurring task, create the next instance
+        if task.frequency != Frequency.ONCE:
+            new_task = task.create_recurring_instance()
+            self.add_task(new_task)
+            return new_task
+
+        return None
 
     def remove_task(self, task: Task) -> None:
         """Removes a task from the scheduler."""
@@ -285,3 +387,95 @@ class Scheduler:
     def get_schedule(self) -> List[Task]:
         """Returns the current daily plan."""
         return self.daily_plan
+
+    def sort_by_time(self) -> List[Task]:
+        """
+        Sorts tasks by their scheduled time.
+
+        Returns:
+            List of tasks sorted by scheduled_time (tasks without time come last)
+        """
+        # Separate tasks with and without scheduled times
+        scheduled = [t for t in self.tasks if t.scheduled_time]
+        unscheduled = [t for t in self.tasks if not t.scheduled_time]
+
+        # Sort scheduled tasks by time
+        scheduled.sort(key=lambda t: t.scheduled_time)
+
+        # Return scheduled first, then unscheduled
+        return scheduled + unscheduled
+
+    def detect_conflicts(self) -> List[Dict[str, any]]:
+        """
+        Detects time conflicts between tasks.
+
+        A conflict occurs when two tasks have overlapping time slots.
+
+        Returns:
+            List of conflict dictionaries with 'task1', 'task2', and 'reason' keys
+        """
+        conflicts = []
+
+        # Only check tasks with scheduled times
+        scheduled_tasks = [t for t in self.tasks if t.scheduled_time and not t.completed]
+
+        # Check each pair of tasks for time overlap
+        for i, task1 in enumerate(scheduled_tasks):
+            for task2 in scheduled_tasks[i + 1:]:
+                # Check if tasks overlap
+                if self._tasks_overlap(task1, task2):
+                    conflicts.append({
+                        'task1': task1,
+                        'task2': task2,
+                        'reason': f"Both scheduled at {task1.scheduled_time} with overlapping times"
+                    })
+
+        return conflicts
+
+    def _tasks_overlap(self, task1: Task, task2: Task) -> bool:
+        """
+        Check if two tasks have overlapping time slots.
+
+        Args:
+            task1: First task
+            task2: Second task
+
+        Returns:
+            True if tasks overlap, False otherwise
+        """
+        if not task1.scheduled_time or not task2.scheduled_time:
+            return False
+
+        # Parse times
+        start1 = datetime.strptime(task1.scheduled_time, '%H:%M')
+        end1 = start1 + timedelta(minutes=task1.duration_minutes)
+
+        start2 = datetime.strptime(task2.scheduled_time, '%H:%M')
+        end2 = start2 + timedelta(minutes=task2.duration_minutes)
+
+        # Check for overlap: task1 starts before task2 ends AND task2 starts before task1 ends
+        return start1 < end2 and start2 < end1
+
+    def get_conflict_warnings(self) -> str:
+        """
+        Generates a human-readable warning message about task conflicts.
+
+        Returns:
+            Warning message string, or empty string if no conflicts
+        """
+        conflicts = self.detect_conflicts()
+
+        if not conflicts:
+            return ""
+
+        warnings = [f"⚠️ Found {len(conflicts)} scheduling conflict(s):\n"]
+
+        for i, conflict in enumerate(conflicts, 1):
+            task1 = conflict['task1']
+            task2 = conflict['task2']
+            warnings.append(
+                f"{i}. {task1.name} ({task1.scheduled_time}-{task1.get_end_time()}) "
+                f"overlaps with {task2.name} ({task2.scheduled_time}-{task2.get_end_time()})"
+            )
+
+        return "\n".join(warnings)
