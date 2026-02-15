@@ -185,7 +185,23 @@ class Scheduler:
         Returns:
             List of tasks in scheduled order
         """
-        pass
+        # Reset the daily plan
+        self.daily_plan = []
+
+        # Get incomplete tasks and prioritize them
+        prioritized_tasks = self.prioritize_tasks()
+
+        # Track available time
+        available_time = self.owner.get_available_time()
+        total_scheduled = 0
+
+        # Greedily add tasks until we run out of time
+        for task in prioritized_tasks:
+            if total_scheduled + task.duration_minutes <= available_time:
+                self.daily_plan.append(task)
+                total_scheduled += task.duration_minutes
+
+        return self.daily_plan
 
     def prioritize_tasks(self) -> List[Task]:
         """
@@ -194,7 +210,17 @@ class Scheduler:
         Returns:
             List of tasks in priority order
         """
-        pass
+        # Get only incomplete tasks
+        incomplete_tasks = self.get_incomplete_tasks()
+
+        # Sort by priority (highest first), then by duration (shorter first for ties)
+        # This maximizes high-priority tasks while fitting more tasks when priorities are equal
+        sorted_tasks = sorted(
+            incomplete_tasks,
+            key=lambda task: (-task.priority, task.duration_minutes)
+        )
+
+        return sorted_tasks
 
     def explain_reasoning(self) -> str:
         """
@@ -203,7 +229,58 @@ class Scheduler:
         Returns:
             String explaining why tasks were scheduled in this order
         """
-        pass
+        if not self.daily_plan:
+            return "No tasks have been scheduled yet. Generate a daily plan first."
+
+        explanation_parts = []
+
+        # Overall summary
+        total_time = self.get_total_scheduled_time()
+        available_time = self.owner.get_available_time()
+        num_tasks = len(self.daily_plan)
+        num_incomplete = len(self.get_incomplete_tasks())
+
+        explanation_parts.append(
+            f"📋 **Schedule Summary for {self.owner.name}**\n"
+            f"- Scheduled {num_tasks} out of {num_incomplete} incomplete tasks\n"
+            f"- Total time: {total_time} minutes out of {available_time} minutes available\n"
+            f"- Time remaining: {available_time - total_time} minutes\n"
+        )
+
+        # Explain prioritization strategy
+        explanation_parts.append(
+            "\n🎯 **Prioritization Strategy:**\n"
+            "Tasks are sorted by priority (highest first), then by duration (shorter first for equal priorities). "
+            "This ensures critical tasks are completed while maximizing the number of tasks that fit in available time.\n"
+        )
+
+        # List scheduled tasks with reasoning
+        explanation_parts.append("\n📝 **Scheduled Tasks:**")
+        for i, task in enumerate(self.daily_plan, 1):
+            explanation_parts.append(
+                f"{i}. **{task.name}** ({task.pet.name}) - "
+                f"{task.duration_minutes} min, Priority {task.priority}/5, {task.task_type.value}"
+            )
+
+        # List skipped tasks if any
+        scheduled_task_ids = {id(task) for task in self.daily_plan}
+        skipped_tasks = [
+            task for task in self.get_incomplete_tasks()
+            if id(task) not in scheduled_task_ids
+        ]
+
+        if skipped_tasks:
+            explanation_parts.append(
+                f"\n⚠️ **Tasks Not Scheduled ({len(skipped_tasks)}):**\n"
+                "These tasks could not fit in the available time:"
+            )
+            for task in skipped_tasks:
+                explanation_parts.append(
+                    f"- {task.name} ({task.pet.name}) - "
+                    f"{task.duration_minutes} min, Priority {task.priority}/5"
+                )
+
+        return "\n".join(explanation_parts)
 
     def get_schedule(self) -> List[Task]:
         """Returns the current daily plan."""
